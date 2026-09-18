@@ -274,10 +274,10 @@ class LanSecurityManager(context: Context) {
 
     fun getControllerPublicKey(controllerId: String): PublicKey? {
         val controllers = getPairedControllersMap()
-        val record = controllers.optJSONObject(controllerId) ?: return false
-        if (record.optBoolean("revoked", false)) return false
+        val record = controllers.optJSONObject(controllerId) ?: return null
+        if (record.optBoolean("revoked", false)) return null
         val pubB64 = record.optString("public_key", "")
-        if (pubB64.isEmpty()) return false
+        if (pubB64.isEmpty()) return null
         return try {
             val keyFactory = KeyFactory.getInstance("EC")
             val pubSpec = X509EncodedKeySpec(Base64.decode(pubB64, Base64.NO_WRAP))
