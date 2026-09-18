@@ -114,4 +114,27 @@ test('Signaling Server - Ephemeral WebRTC exchange and strict security filters',
     const closeCode = await new Promise((res) => ws.once('close', (code) => res(code)));
     assert.strictEqual(closeCode, 1008);
   });
+
+  await t.test('Strictly drops deeply nested forbidden parameters and terminates connection', async () => {
+    const ws = new WebSocket(wsUrl);
+    await new Promise((res) => ws.on('open', res));
+
+    ws.send(JSON.stringify({
+      type: 'ICE_CANDIDATE',
+      sdpMid: '0',
+      sdpMLineIndex: 0,
+      nested_data: [
+        { harmless: 'value' },
+        { sub_nested: { command_id: 'leaked-command-id' } }
+      ]
+    }));
+
+    const err = await new Promise((res) => ws.once('message', (d) => res(JSON.parse(d))));
+    assert.strictEqual(err.type, 'ERROR');
+    assert.strictEqual(err.code, 'FORBIDDEN_PAYLOAD_CONTENT');
+    assert.ok(err.message.includes('command_id'));
+
+    const closeCode = await new Promise((res) => ws.once('close', (code) => res(code)));
+    assert.strictEqual(closeCode, 1008);
+  });
 });

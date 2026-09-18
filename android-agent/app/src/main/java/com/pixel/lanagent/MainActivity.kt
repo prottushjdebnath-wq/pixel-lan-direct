@@ -123,7 +123,7 @@ class MainActivity : Activity() {
         }
 
         val signalingInput = EditText(this).apply {
-            hint = "ws://<remote-host>:8991/signaling"
+            hint = "wss://<remote-host>/signaling (or ws:// for LAN)"
             textSize = 13f
             securityManager.getRemoteSignalingUrl()?.let { setText(it) }
         }

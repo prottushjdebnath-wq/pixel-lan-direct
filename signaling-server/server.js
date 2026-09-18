@@ -34,12 +34,16 @@ const PERMITTED_SIGNALING_TYPES = new Set([
   'PONG'
 ]);
 
-// Forbidden keywords/payload patterns (management commands, secrets, screenshots)
+// Forbidden keywords/payload patterns (management commands, secrets, screenshots, telemetry)
 const FORBIDDEN_KEYS = new Set([
   'command_id',
+  'command',
+  'commands',
   'action',
   'parameters',
   'image_base64',
+  'screenshot',
+  'telemetry',
   'private_key',
   'privkey',
   'pairing_code',
@@ -47,6 +51,26 @@ const FORBIDDEN_KEYS = new Set([
   'pin',
   'secret'
 ]);
+
+// Recursively inspect payload objects and arrays for forbidden management/secret keys
+function findForbiddenField(obj) {
+  if (!obj || typeof obj !== 'object') return null;
+  if (Array.isArray(obj)) {
+    for (const item of obj) {
+      const forbidden = findForbiddenField(item);
+      if (forbidden) return forbidden;
+    }
+    return null;
+  }
+  for (const k of Object.keys(obj)) {
+    if (FORBIDDEN_KEYS.has(k.toLowerCase())) {
+      return k;
+    }
+    const forbidden = findForbiddenField(obj[k]);
+    if (forbidden) return forbidden;
+  }
+  return null;
+}
 
 function createSignalingServer(options = {}) {
   const server = http.createServer((req, res) => {
@@ -115,17 +139,16 @@ function createSignalingServer(options = {}) {
           return;
         }
 
-        // Deep inspection: verify no management parameters or secrets are leaked into signaling
-        for (const k of Object.keys(msg)) {
-          if (FORBIDDEN_KEYS.has(k.toLowerCase())) {
-            ws.send(JSON.stringify({
-              type: 'ERROR',
-              code: 'FORBIDDEN_PAYLOAD_CONTENT',
-              message: `Signaling rejects field '${k}'. Management commands, private keys, and screenshots are forbidden in signaling.`
-            }));
-            ws.close(1008, 'Policy violation: forbidden field in signaling');
-            return;
-          }
+        // Deep inspection: verify no management parameters or secrets are leaked into signaling (recursive)
+        const forbiddenField = findForbiddenField(msg);
+        if (forbiddenField) {
+          ws.send(JSON.stringify({
+            type: 'ERROR',
+            code: 'FORBIDDEN_PAYLOAD_CONTENT',
+            message: `Signaling rejects field '${forbiddenField}'. Management commands, private keys, screenshots, and telemetry are forbidden in signaling.`
+          }));
+          ws.close(1008, 'Policy violation: forbidden field in signaling');
+          return;
         }
 
         handleSignalingMessage(ws, msg);

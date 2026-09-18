@@ -692,4 +692,114 @@ class LanSecurityManagerTest {
         mgr2.setRemoteSignalingUrl("   ")
         assertNull(mgr2.getRemoteSignalingUrl())
     }
+
+    @Test
+    fun testP1363ToDerEdgeCasesAndSafeFailureContainment() {
+        // 1. High-bit R & S (MSB >= 0x80)
+        val sigHighBit = ByteArray(64).apply {
+            this[0] = 0x85.toByte()
+            this[31] = 0x01.toByte()
+            this[32] = 0xFE.toByte()
+            this[63] = 0x09.toByte()
+        }
+        val derHighBit = LanSecurityManager.p1363ToDer(sigHighBit)
+        assertEquals(0x30.toByte(), derHighBit[0])
+        assertEquals(70.toByte(), derHighBit[1]) // len = 2 + 33 + 2 + 33 = 70
+        assertEquals(0x02.toByte(), derHighBit[2])
+        assertEquals(33.toByte(), derHighBit[3]) // 33 bytes for R with 0x00 prepended
+        assertEquals(0x00.toByte(), derHighBit[4])
+        assertEquals(0x85.toByte(), derHighBit[5])
+        assertEquals(0x02.toByte(), derHighBit[37])
+        assertEquals(33.toByte(), derHighBit[38]) // 33 bytes for S with 0x00 prepended
+        assertEquals(0x00.toByte(), derHighBit[39])
+        assertEquals(0xFE.toByte(), derHighBit[40])
+
+        // 2. Leading zeros in R
+        val sigLeadingZerosR = ByteArray(64).apply {
+            this[4] = 0x07.toByte() // 4 leading zero bytes
+            this[32] = 0x10.toByte()
+        }
+        val derLeadingZerosR = LanSecurityManager.p1363ToDer(sigLeadingZerosR)
+        assertEquals(0x30.toByte(), derLeadingZerosR[0])
+        assertEquals(0x02.toByte(), derLeadingZerosR[2])
+        assertEquals(28.toByte(), derLeadingZerosR[3]) // 32 - 4 = 28 bytes
+
+        // 3. Leading zeros in S
+        val sigLeadingZerosS = ByteArray(64).apply {
+            this[0] = 0x12.toByte()
+            this[40] = 0x24.toByte() // 8 leading zero bytes in S
+        }
+        val derLeadingZerosS = LanSecurityManager.p1363ToDer(sigLeadingZerosS)
+        assertEquals(0x30.toByte(), derLeadingZerosS[0])
+
+        // 4. Zero R / Zero S
+        val sigZeroRS = ByteArray(64)
+        val derZeroRS = LanSecurityManager.p1363ToDer(sigZeroRS)
+        assertEquals(0x30.toByte(), derZeroRS[0])
+        assertEquals(0x02.toByte(), derZeroRS[2])
+        assertEquals(1.toByte(), derZeroRS[3]) // R is single zero byte
+        assertEquals(0x00.toByte(), derZeroRS[4])
+
+        // 5. Truncated signature (< 64 bytes)
+        val sigTrunc = ByteArray(32) { 0x11.toByte() }
+        val derTrunc = LanSecurityManager.p1363ToDer(sigTrunc)
+        assertArrayEquals(sigTrunc, derTrunc)
+
+        // 6. Oversized signature (> 64 bytes)
+        val sigOver = ByteArray(65) { 0x22.toByte() }
+        val derOver = LanSecurityManager.p1363ToDer(sigOver)
+        assertArrayEquals(sigOver, derOver)
+
+        // 7. Verify Signature.verify safe failure containment
+        val kpg = KeyPairGenerator.getInstance("EC")
+        kpg.initialize(ECGenParameterSpec("secp256r1"), SecureRandom())
+        val kp = kpg.generateKeyPair()
+        val verifier = Signature.getInstance("SHA256withECDSA")
+        verifier.initVerify(kp.public)
+        verifier.update("test-payload".toByteArray(Charsets.UTF_8))
+
+        // Truncated, oversized, zero-bytes, and random garbage should all fail safely without crashing
+        assertFalse(try { verifier.verify(derTrunc) } catch (_: Exception) { false })
+        assertFalse(try { verifier.verify(derOver) } catch (_: Exception) { false })
+        assertFalse(try { verifier.verify(derZeroRS) } catch (_: Exception) { false })
+        assertFalse(try { verifier.verify(ByteArray(64) { 0xAA.toByte() }) } catch (_: Exception) { false })
+    }
+
+    @Test
+    fun testCanonicalizeParametersNonScalarRejectionAndUnicode() {
+        // 1. Non-scalar JSONObject rejection
+        val paramsWithObj = JSONObject().apply {
+            put("valid", "hello")
+            put("illegal_obj", JSONObject().apply { put("nested", 123) })
+        }
+        try {
+            LanSecurityManager.canonicalizeParameters(paramsWithObj)
+            fail("Expected IllegalArgumentException for nested JSONObject parameter")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message!!.contains("non-scalar"))
+        }
+
+        // 2. Non-scalar JSONArray rejection
+        val paramsWithArr = JSONObject().apply {
+            put("valid", "hello")
+            put("illegal_arr", org.json.JSONArray().apply { put(1); put(2) })
+        }
+        try {
+            LanSecurityManager.canonicalizeParameters(paramsWithArr)
+            fail("Expected IllegalArgumentException for JSONArray parameter")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message!!.contains("non-scalar"))
+        }
+
+        // 3. Deterministic Unicode canonicalization matching JS test-controller
+        val unicodeParams = JSONObject().apply {
+            put("symbols", ":=|")
+            put("emoji", "🚀")
+            put("cjk", "こんにちは")
+            put("accent", "Café")
+        }
+        val canonical = LanSecurityManager.canonicalizeParameters(unicodeParams)
+        val expected = "6:accent=4:Café,3:cjk=5:こんにちは,5:emoji=2:🚀,7:symbols=3::=|"
+        assertEquals(expected, canonical)
+    }
 }

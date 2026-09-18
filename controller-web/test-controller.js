@@ -147,4 +147,28 @@ test('Controller WebCrypto & Context-Bound Authentication', async (t) => {
     );
     assert.strictEqual(isTamperedValid, false);
   });
+
+  await t.test('Strictly rejects non-scalar object/array parameter values', () => {
+    assert.throws(() => {
+      cryptoClient.canonicalizeParameters({ nested: { illegal: true } });
+    }, /non-scalar/);
+
+    assert.throws(() => {
+      cryptoClient.canonicalizeParameters({ list: [1, 2, 3] });
+    }, /non-scalar/);
+  });
+
+  await t.test('Canonicalizes Unicode, CJK, accented chars, and emoji surrogate pairs deterministically', () => {
+    const params = {
+      cjk: 'こんにちは',
+      accent: 'Café',
+      emoji: '🚀',
+      symbols: ':=|'
+    };
+    const canonical = cryptoClient.canonicalizeParameters(params);
+    // Keys sorted: accent, cjk, emoji, symbols
+    // UTF-16 code unit lengths: accent (4), Café (4), cjk (3), こんにちは (5), emoji (5), 🚀 (2 code units), symbols (7), :=| (3)
+    const expected = '6:accent=4:Café,3:cjk=5:こんにちは,5:emoji=2:🚀,7:symbols=3::=|';
+    assert.strictEqual(canonical, expected);
+  });
 });

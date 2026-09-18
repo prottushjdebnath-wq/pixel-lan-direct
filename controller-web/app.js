@@ -303,7 +303,7 @@ async function connectDirectLan() {
 function connectRemoteSignaling() {
   const url = document.getElementById('signaling-url').value.trim();
   if (!url) {
-    alert("Please enter remote WebSocket signaling URL (e.g. ws://...:8991/signaling)");
+    alert("Please enter remote WebSocket signaling URL (e.g. wss://<signaling-domain>/signaling, or ws:// for local LAN)");
     return;
   }
   connectionManager.connectRemoteSignaling(url, cryptoClient.controllerId, expectedPixelId);

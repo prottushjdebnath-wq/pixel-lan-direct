@@ -108,14 +108,22 @@ class ControllerCrypto {
   // --- Deterministic Command Canonicalization & Per-Command Signing ---
   // Canonical representation: Length-prefixed fields joined by '|':
   // PROTOCOL_CONTEXT | command_id | session_id | epoch | seq_num | timestamp | action | canonical_parameters | controller_id | controller_pubkey
+  // NOTE ON LENGTH PREFIXES: Length prefixes represent UTF-16 code-unit length (i.e. String.length in JS and Java),
+  // which is identical across both runtimes for all Unicode characters (including BMP, CJK, and surrogate pairs like emoji).
+  // NOTE ON PARAMETERS: Parameters MUST be flat key-value pairs with primitive scalar values (string, number, boolean).
+  // Nested JSON objects and arrays are strictly prohibited.
 
   canonicalizeParameters(params) {
     if (!params || typeof params !== 'object') return "";
     const keys = Object.keys(params).sort();
     if (keys.length === 0) return "";
     return keys.map(k => {
-      const val = String(params[k]);
-      return `${k.length}:${k}=${val.length}:${val}`;
+      const val = params[k];
+      if (val !== null && typeof val === 'object') {
+        throw new Error(`Command parameter '${k}' has non-scalar value. Only primitive scalar values are permitted.`);
+      }
+      const strVal = String(val);
+      return `${k.length}:${k}=${strVal.length}:${strVal}`;
     }).join(",");
   }
 

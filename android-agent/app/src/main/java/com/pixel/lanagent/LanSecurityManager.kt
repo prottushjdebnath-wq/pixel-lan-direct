@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import android.util.Log
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import org.json.JSONArray
 import org.json.JSONObject
 import java.math.BigInteger
 import java.security.*
@@ -82,12 +83,20 @@ class LanSecurityManager(
         // --- Deterministic Command Canonicalization & Verification ---
         // Format: Length-prefixed fields separated by '|':
         // PROTOCOL_CONTEXT | command_id | session_id | epoch | seq_num | timestamp | action | canonical_parameters | controller_id | controller_pubkey
+        // NOTE ON LENGTH PREFIXES: Length prefixes represent UTF-16 code-unit length (i.e. String.length in JS and Java),
+        // which is identical across both runtimes for all Unicode characters (including BMP, CJK, and surrogate pairs like emoji).
+        // NOTE ON PARAMETERS: Parameters MUST be flat key-value pairs with primitive scalar values (string, number, boolean).
+        // Nested JSON objects and arrays are strictly prohibited.
 
         fun canonicalizeParameters(params: JSONObject?): String {
             if (params == null || params.length() == 0) return ""
             val keys = params.keys().asSequence().toList().sorted()
             return keys.joinToString(",") { k ->
-                val v = params.get(k).toString()
+                val raw = params.get(k)
+                if (raw is JSONObject || raw is JSONArray) {
+                    throw IllegalArgumentException("Command parameter '$k' has non-scalar value. Only primitive scalar values are permitted.")
+                }
+                val v = raw.toString()
                 "${k.length}:$k=${v.length}:$v"
             }
         }
@@ -167,7 +176,7 @@ class LanSecurityManager(
 
     // Persistent monotonic epoch counter (incremented across agent process restart to invalidate stale commands)
     val persistentEpoch: Long = (prefs.getLong(KEY_CURRENT_EPOCH, 0L) + 1L).also {
-        prefs.edit().putLong(KEY_CURRENT_EPOCH, it).apply()
+        prefs.edit().putLong(KEY_CURRENT_EPOCH, it).commit()
     }
 
     // Pixel persistent ECDSA P-256 keypair
