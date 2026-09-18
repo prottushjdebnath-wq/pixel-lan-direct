@@ -16,10 +16,10 @@
       color: #E0E0E0;
       padding: env(safe-area-inset-top, 12px) env(safe-area-inset-right, 12px) env(safe-area-inset-bottom, 12px) env(safe-area-inset-left, 12px);
     }
-    
+
     .card { background: #1E1E1E; border-radius: 12px; padding: 14px; margin-bottom: 12px; border: 1px solid #333; }
     h1 { font-size: 18px; margin-bottom: 4px; color: #FFF; }
-    
+
     .status-badge { display: inline-block; padding: 4px 8px; border-radius: 6px; font-weight: bold; font-size: 11px; margin-right: 4px; margin-top: 4px; }
     .badge-lan { background: #1B5E20; color: #A5D6A7; }
     .badge-stun { background: #0D47A1; color: #BBDEFB; }
@@ -117,7 +117,7 @@
         <div class="metric-val" id="val-fp" style="font-size: 10px; color: #81C784;">--</div>
       </div>
     </div>
-    
+
     <div class="notice">
       <b>Security Qualification:</b> The controller utilizes a browser-managed WebCrypto key with non-extractable API semantics; persistent browser storage security is platform/browser dependent and is not equivalent to hardware-backed Secure Enclave storage.
     </div>
@@ -187,7 +187,7 @@
       <button class="btn-nav" onclick="sendNav('NAV_HOME')">🏠 Home</button>
       <button class="btn-nav" onclick="sendNav('NAV_RECENTS')">▢ Recents</button>
     </div>
-    
+
     <div style="margin-top: 10px;">
       <input type="text" id="text-to-inject" placeholder="Text to inject into focused input...">
       <button onclick="injectText()" style="background: #1565C0;">Send Text</button>

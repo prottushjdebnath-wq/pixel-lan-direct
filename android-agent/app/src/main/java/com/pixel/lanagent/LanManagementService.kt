@@ -84,10 +84,14 @@ class LanManagementService : Service(), ConnectionManager.ConnectionListener {
             Log.i(TAG, "LanManagementService started (START_STICKY). Epoch: ${securityManager.persistentEpoch}")
         }
 
-        // Connect remote signaling if configured
-        val signalingUrl = intent?.getStringExtra(EXTRA_SIGNALING_URL)
-        if (!signalingUrl.isNullOrEmpty()) {
-            connectionManager.connectRemoteSignaling(signalingUrl, securityManager.getDeviceId())
+        // Connect remote signaling if configured in intent extra or persisted in secure preferences
+        val intentSignalingUrl = intent?.getStringExtra(EXTRA_SIGNALING_URL)
+        if (!intentSignalingUrl.isNullOrEmpty()) {
+            securityManager.setRemoteSignalingUrl(intentSignalingUrl)
+        }
+        val effectiveSignalingUrl = intentSignalingUrl ?: securityManager.getRemoteSignalingUrl()
+        if (!effectiveSignalingUrl.isNullOrEmpty()) {
+            connectionManager.connectRemoteSignaling(effectiveSignalingUrl, securityManager.getDeviceId())
         }
 
         return START_STICKY

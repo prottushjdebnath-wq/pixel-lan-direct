@@ -257,4 +257,194 @@ class LanSecurityManagerTest {
         assertFalse(securityManager.isControllerAuthorized(controllerId))
         assertNull(securityManager.getControllerPublicKey(controllerId))
     }
+
+    @Test
+    fun testMandatoryEpochValidation() {
+        val controllerId = "controller-epoch-test"
+        val kpg = KeyPairGenerator.getInstance("EC")
+        val kp = kpg.generateKeyPair()
+        val pubB64 = LanSecurityManager.b64Encode(kp.public.encoded)
+
+        securityManager.registerController(controllerId, pubB64)
+        val challenge = securityManager.createChallenge(controllerId)
+        val sessionId = challenge.getString("session_id")
+        val nonce = challenge.getString("nonce")
+        val timestamp = challenge.getLong("timestamp")
+
+        val canonical = "${LanSecurityManager.PROTOCOL_CONTEXT}:$sessionId:$nonce:$timestamp:${securityManager.getDeviceId()}:${securityManager.getDevicePublicKeyBase64()}:$controllerId:$pubB64"
+        val signer = Signature.getInstance("SHA256withECDSA")
+        signer.initSign(kp.private)
+        signer.update(canonical.toByteArray(Charsets.UTF_8))
+        val sigB64 = LanSecurityManager.b64Encode(signer.sign())
+
+        val session = securityManager.verifyChallengeResponse(JSONObject().apply {
+            put("type", "AUTH_RESPONSE")
+            put("protocol_context", LanSecurityManager.PROTOCOL_CONTEXT)
+            put("session_id", sessionId)
+            put("controller_id", controllerId)
+            put("controller_pubkey", pubB64)
+            put("signature", sigB64)
+        })
+        assertNotNull(session)
+        val activeEpoch = session!!.epoch
+
+        // 1. Missing epoch -> Rejected
+        val cmdMissingEpoch = JSONObject().apply {
+            put("type", "COMMAND")
+            put("command_id", "cmd-missing-epoch")
+            put("session_id", sessionId)
+            put("seq_num", 1L)
+            put("timestamp", System.currentTimeMillis())
+            put("action", "TAP")
+        }
+        val resMissing = securityManager.validateCommand(cmdMissingEpoch)
+        assertTrue(resMissing is LanSecurityManager.CommandValidationResult.Rejected)
+        assertEquals("Missing mandatory session epoch", (resMissing as LanSecurityManager.CommandValidationResult.Rejected).reason)
+
+        // 2. Non-numeric epoch -> Rejected
+        val cmdNonNumericEpoch = JSONObject().apply {
+            put("type", "COMMAND")
+            put("command_id", "cmd-non-numeric-epoch")
+            put("session_id", sessionId)
+            put("epoch", "not-a-number")
+            put("seq_num", 1L)
+            put("timestamp", System.currentTimeMillis())
+            put("action", "TAP")
+        }
+        val resNonNum = securityManager.validateCommand(cmdNonNumericEpoch)
+        assertTrue(resNonNum is LanSecurityManager.CommandValidationResult.Rejected)
+        assertEquals("Invalid non-numeric session epoch", (resNonNum as LanSecurityManager.CommandValidationResult.Rejected).reason)
+
+        // 3. Stale / wrong epoch -> Rejected
+        val cmdWrongEpoch = JSONObject().apply {
+            put("type", "COMMAND")
+            put("command_id", "cmd-wrong-epoch")
+            put("session_id", sessionId)
+            put("epoch", activeEpoch + 99L)
+            put("seq_num", 1L)
+            put("timestamp", System.currentTimeMillis())
+            put("action", "TAP")
+        }
+        val resWrong = securityManager.validateCommand(cmdWrongEpoch)
+        assertTrue(resWrong is LanSecurityManager.CommandValidationResult.Rejected)
+        assertTrue((resWrong as LanSecurityManager.CommandValidationResult.Rejected).reason.contains("Stale epoch"))
+
+        // 4. Valid epoch -> Valid
+        val cmdValid = JSONObject().apply {
+            put("type", "COMMAND")
+            put("command_id", "cmd-valid-epoch")
+            put("session_id", sessionId)
+            put("epoch", activeEpoch)
+            put("seq_num", 1L)
+            put("timestamp", System.currentTimeMillis())
+            put("action", "TAP")
+        }
+        val resValid = securityManager.validateCommand(cmdValid)
+        assertTrue(resValid is LanSecurityManager.CommandValidationResult.Valid)
+
+        // Record execution
+        val cachedResp = JSONObject().apply { put("status", "ok") }.toString()
+        securityManager.recordCommandResult("cmd-valid-epoch", 1L, System.currentTimeMillis(), cachedResp)
+
+        // 5. Duplicate with current epoch -> Preserved as Duplicate
+        val resDuplicateCurrentEpoch = securityManager.validateCommand(cmdValid)
+        assertTrue(resDuplicateCurrentEpoch is LanSecurityManager.CommandValidationResult.Duplicate)
+        assertEquals(cachedResp, (resDuplicateCurrentEpoch as LanSecurityManager.CommandValidationResult.Duplicate).cachedResponse)
+
+        // 6. Duplicate with missing or stale epoch -> Rejected
+        val duplicateMissingEpoch = JSONObject(cmdValid.toString()).apply {
+            remove("epoch")
+        }
+        val resDupMissing = securityManager.validateCommand(duplicateMissingEpoch)
+        assertTrue(resDupMissing is LanSecurityManager.CommandValidationResult.Rejected)
+    }
+
+    @Test
+    fun testOldSessionEpochCannotExecuteInNewSession() {
+        val controllerId = "controller-stale-epoch"
+        val kpg = KeyPairGenerator.getInstance("EC")
+        val kp = kpg.generateKeyPair()
+        val pubB64 = LanSecurityManager.b64Encode(kp.public.encoded)
+
+        securityManager.registerController(controllerId, pubB64)
+        val ch1 = securityManager.createChallenge(controllerId)
+        val s1Id = ch1.getString("session_id")
+        val s1Nonce = ch1.getString("nonce")
+        val s1Time = ch1.getLong("timestamp")
+
+        val canon1 = "${LanSecurityManager.PROTOCOL_CONTEXT}:$s1Id:$s1Nonce:$s1Time:${securityManager.getDeviceId()}:${securityManager.getDevicePublicKeyBase64()}:$controllerId:$pubB64"
+        val signer1 = Signature.getInstance("SHA256withECDSA")
+        signer1.initSign(kp.private)
+        signer1.update(canon1.toByteArray(Charsets.UTF_8))
+
+        val session1 = securityManager.verifyChallengeResponse(JSONObject().apply {
+            put("type", "AUTH_RESPONSE")
+            put("protocol_context", LanSecurityManager.PROTOCOL_CONTEXT)
+            put("session_id", s1Id)
+            put("controller_id", controllerId)
+            put("controller_pubkey", pubB64)
+            put("signature", LanSecurityManager.b64Encode(signer1.sign()))
+        })
+        assertNotNull(session1)
+        val epoch1 = session1!!.epoch
+
+        // Simulate device reboot / service restart with new epoch
+        val mgr2 = LanSecurityManager(customPrefs = mockPrefs)
+        assertTrue(mgr2.persistentEpoch > epoch1)
+
+        val ch2 = mgr2.createChallenge(controllerId)
+        val s2Id = ch2.getString("session_id")
+        val s2Nonce = ch2.getString("nonce")
+        val s2Time = ch2.getLong("timestamp")
+
+        val canon2 = "${LanSecurityManager.PROTOCOL_CONTEXT}:$s2Id:$s2Nonce:$s2Time:${mgr2.getDeviceId()}:${mgr2.getDevicePublicKeyBase64()}:$controllerId:$pubB64"
+        val signer2 = Signature.getInstance("SHA256withECDSA")
+        signer2.initSign(kp.private)
+        signer2.update(canon2.toByteArray(Charsets.UTF_8))
+
+        val session2 = mgr2.verifyChallengeResponse(JSONObject().apply {
+            put("type", "AUTH_RESPONSE")
+            put("protocol_context", LanSecurityManager.PROTOCOL_CONTEXT)
+            put("session_id", s2Id)
+            put("controller_id", controllerId)
+            put("controller_pubkey", pubB64)
+            put("signature", LanSecurityManager.b64Encode(signer2.sign()))
+        })
+        assertNotNull(session2)
+
+        // Attempting to execute command with old epoch1 in new session2
+        val staleEpochCmd = JSONObject().apply {
+            put("type", "COMMAND")
+            put("command_id", "cmd-old-epoch")
+            put("session_id", s2Id)
+            put("epoch", epoch1)
+            put("seq_num", 1L)
+            put("timestamp", System.currentTimeMillis())
+            put("action", "TAP")
+        }
+        val res = mgr2.validateCommand(staleEpochCmd)
+        assertTrue(res is LanSecurityManager.CommandValidationResult.Rejected)
+        assertTrue((res as LanSecurityManager.CommandValidationResult.Rejected).reason.contains("Stale epoch"))
+    }
+
+    @Test
+    fun testSignalingUrlPersistenceAndRetrieval() {
+        assertNull(securityManager.getRemoteSignalingUrl())
+
+        val testUrl = "wss://pixel-relay.example.com:8991/signaling"
+        securityManager.setRemoteSignalingUrl(testUrl)
+        assertEquals(testUrl, securityManager.getRemoteSignalingUrl())
+
+        // Survives process restart with same preferences
+        val mgr2 = LanSecurityManager(customPrefs = mockPrefs)
+        assertEquals(testUrl, mgr2.getRemoteSignalingUrl())
+
+        // Clearing removes from preferences
+        mgr2.setRemoteSignalingUrl(null)
+        assertNull(mgr2.getRemoteSignalingUrl())
+
+        // Blank string also clears
+        mgr2.setRemoteSignalingUrl("   ")
+        assertNull(mgr2.getRemoteSignalingUrl())
+    }
 }

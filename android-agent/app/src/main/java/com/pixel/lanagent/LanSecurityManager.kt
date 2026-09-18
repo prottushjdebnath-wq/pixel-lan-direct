@@ -44,6 +44,7 @@ class LanSecurityManager(
         private const val KEY_PAIRING_ATTEMPTS = "pairing_attempts"
         private const val KEY_CURRENT_EPOCH = "current_epoch"
         private const val KEY_PERSISTENT_JOURNAL = "persistent_command_journal"
+        private const val KEY_PERSISTENT_SIGNALING_URL = "persistent_remote_signaling_url"
 
         const val PROTOCOL_CONTEXT = "PIXEL_SECURE_AUTH_V1"
         private const val MAX_PAIRING_ATTEMPTS = 3
@@ -394,6 +395,20 @@ class LanSecurityManager(
         }
     }
 
+    // --- Persistent Signaling Configuration ---
+
+    fun setRemoteSignalingUrl(url: String?) {
+        if (url.isNullOrBlank()) {
+            prefs.edit().remove(KEY_PERSISTENT_SIGNALING_URL).apply()
+        } else {
+            prefs.edit().putString(KEY_PERSISTENT_SIGNALING_URL, url.trim()).apply()
+        }
+    }
+
+    fun getRemoteSignalingUrl(): String? {
+        return prefs.getString(KEY_PERSISTENT_SIGNALING_URL, null)
+    }
+
     // --- Context-Bound Challenge-Response Authentication ---
     // Payload explicitly binds: PROTOCOL_CONTEXT || Session_UUID || Nonce || Timestamp || Pixel_ID || Pixel_PubKey || Controller_ID || Controller_PubKey
 
@@ -498,7 +513,6 @@ class LanSecurityManager(
         val commandId = cmdJson.optString("command_id")
         val seqNum = cmdJson.optLong("seq_num", -1L)
         val timestamp = cmdJson.optLong("timestamp", 0L)
-        val epoch = cmdJson.optLong("epoch", -1L)
 
         if (commandId.isEmpty()) {
             return CommandValidationResult.Rejected("Missing command_id")
@@ -506,6 +520,19 @@ class LanSecurityManager(
 
         if (seqNum < 0) {
             return CommandValidationResult.Rejected("Missing or invalid seq_num")
+        }
+
+        if (!cmdJson.has("epoch")) {
+            return CommandValidationResult.Rejected("Missing mandatory session epoch")
+        }
+        val epoch = try {
+            cmdJson.getLong("epoch")
+        } catch (_: Exception) {
+            return CommandValidationResult.Rejected("Invalid non-numeric session epoch")
+        }
+
+        if (epoch != session.epoch) {
+            return CommandValidationResult.Rejected("Stale epoch: received $epoch != active ${session.epoch}")
         }
 
         val now = System.currentTimeMillis()
@@ -527,13 +554,9 @@ class LanSecurityManager(
             }
         }
 
-        // 2. Enforce active session ID & epoch
+        // 2. Enforce active session ID
         if (cmdSessionId != session.sessionId) {
             return CommandValidationResult.Rejected("Invalid session_id for current epoch; command not found in idempotency cache")
-        }
-
-        if (epoch != -1L && epoch != session.epoch) {
-            return CommandValidationResult.Rejected("Stale epoch: received $epoch != active ${session.epoch}")
         }
 
         // 3. Monotonic sequence number enforcement within the session

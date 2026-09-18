@@ -125,6 +125,7 @@ class MainActivity : Activity() {
         val signalingInput = EditText(this).apply {
             hint = "ws://<remote-host>:8991/signaling"
             textSize = 13f
+            securityManager.getRemoteSignalingUrl()?.let { setText(it) }
         }
 
         val btnConnectSignaling = Button(this).apply {
@@ -132,6 +133,7 @@ class MainActivity : Activity() {
             setOnClickListener {
                 val url = signalingInput.text.toString().trim()
                 if (url.isNotEmpty()) {
+                    securityManager.setRemoteSignalingUrl(url)
                     val intent = Intent(this@MainActivity, LanManagementService::class.java).apply {
                         putExtra(LanManagementService.EXTRA_SIGNALING_URL, url)
                     }
