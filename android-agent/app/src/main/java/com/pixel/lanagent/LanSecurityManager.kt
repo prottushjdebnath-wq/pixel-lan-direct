@@ -276,10 +276,8 @@ class LanSecurityManager(context: Context) {
         val controllers = getPairedControllersMap()
         val record = controllers.optJSONObject(controllerId) ?: return null
         if (record.optBoolean("revoked", false)) return null
-
         val pubB64 = record.optString("public_key", "")
         if (pubB64.isEmpty()) return null
-
         return try {
             val keyFactory = KeyFactory.getInstance("EC")
             val pubSpec = X509EncodedKeySpec(Base64.decode(pubB64, Base64.NO_WRAP))
