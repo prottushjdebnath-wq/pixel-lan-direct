@@ -22,7 +22,7 @@ jobs:
         with:
           packages: ''
 
-            - name: Install Android SDK packages
+      - name: Install Android SDK packages
         shell: bash
         run: |
           set -uo pipefail
