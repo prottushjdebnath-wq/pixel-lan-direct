@@ -1,77 +1,18 @@
-name: Android Build
-on:
-  workflow_dispatch:
-jobs:
-  build:
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          packages: ''
       - name: Install Android SDK packages
         shell: bash
         run: |
           set -e
           SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
-          yes | sdkmanager --sdk_root="$SDK_ROOT" --licenses
+          set +e
+          yes 2>/dev/null | sdkmanager --sdk_root="$SDK_ROOT" --licenses
+          pipeline_status=("${PIPESTATUS[@]}")
+          set -e
+          sdkmanager_status="${pipeline_status[1]}"
+          if [ "$sdkmanager_status" -ne 0 ]; then
+            echo "sdkmanager --licenses failed with exit code $sdkmanager_status"
+            exit "$sdkmanager_status"
+          fi
           sdkmanager --sdk_root="$SDK_ROOT" \
             "platform-tools" \
             "platforms;android-34" \
             "build-tools;34.0.0"
-      - name: Verify Android SDK
-        shell: bash
-        run: |
-          set -e
-          sdkmanager --sdk_root="${ANDROID_HOME:-/usr/local/lib/android/sdk}" --list_installed
-          test -d "${ANDROID_HOME}/platforms/android-34"
-          test -d "${ANDROID_HOME}/build-tools/34.0.0"
-      - name: Verify source
-        shell: bash
-        run: |
-          set -e
-          test -f android-agent/settings.gradle
-          test -f android-agent/build.gradle
-          test -f android-agent/app/build.gradle
-          test -f android-agent/gradlew
-          test -f android-agent/gradle/wrapper/gradle-wrapper.properties
-      - name: Generate Gradle wrapper
-        working-directory: android-agent
-        run: |
-          gradle wrapper --gradle-version 8.2
-          chmod +x gradlew
-      - name: Resolve WebRTC dependency
-        working-directory: android-agent
-        run: |
-          ./gradlew dependencies \
-            --configuration debugCompileClasspath \
-            --stacktrace
-      - name: Build APK
-        working-directory: android-agent
-        run: |
-          ./gradlew clean assembleDebug --stacktrace
-      - name: Verify APK
-        working-directory: android-agent
-        run: |
-          set -e
-          test -f app/build/outputs/apk/debug/app-debug.apk
-          ls -lh app/build/outputs/apk/debug/app-debug.apk
-      - name: SHA-256
-        working-directory: android-agent
-        run: |
-          sha256sum app/build/outputs/apk/debug/app-debug.apk \
-            | tee apk-sha256.txt
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: pixel-lan-direct-debug-apk
-          path: |
-            android-agent/app/build/outputs/apk/debug/app-debug.apk
-            android-agent/apk-sha256.txt
