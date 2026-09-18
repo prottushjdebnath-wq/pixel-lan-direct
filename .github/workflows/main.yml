@@ -17,29 +17,21 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-           - name: Set up Android SDK
+      - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
       - name: Install Android SDK packages
         shell: bash
         run: |
-          set -euo pipefail
-
-          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:?ANDROID_HOME is not set}}"
-
-          yes | sdkmanager --sdk_root="$SDK_ROOT" --licenses >/dev/null
-
-          sdkmanager --sdk_root="$SDK_ROOT" \
-            "platform-tools" \
-            "platforms;android-34" \
-            "build-tools;34.0.0"
-
-      - name: Accept Android SDK licenses
-        run: |
-          yes | sdkmanager --licenses >/dev/null || true
+          set -e
+          SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          yes | sdkmanager --sdk_root="$SDK_ROOT" --licenses
+          sdkmanager --sdk_root="$SDK_ROOT" "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
       - name: Verify source
+        shell: bash
         run: |
+          set -e
           test -f android-agent/settings.gradle
           test -f android-agent/build.gradle
           test -f android-agent/app/build.gradle
@@ -54,24 +46,22 @@ jobs:
 
       - name: Resolve WebRTC dependency
         working-directory: android-agent
-        run: |
-          ./gradlew dependencies --configuration debugCompileClasspath --stacktrace
+        run: ./gradlew dependencies --configuration debugCompileClasspath --stacktrace
 
       - name: Build APK
         working-directory: android-agent
-        run: |
-          ./gradlew clean assembleDebug --stacktrace
+        run: ./gradlew clean assembleDebug --stacktrace
 
       - name: Verify APK
         working-directory: android-agent
         run: |
+          set -e
           test -f app/build/outputs/apk/debug/app-debug.apk
           ls -lh app/build/outputs/apk/debug/app-debug.apk
 
       - name: SHA-256
         working-directory: android-agent
-        run: |
-          sha256sum app/build/outputs/apk/debug/app-debug.apk | tee apk-sha256.txt
+        run: sha256sum app/build/outputs/apk/debug/app-debug.apk | tee apk-sha256.txt
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
