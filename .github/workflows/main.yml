@@ -87,8 +87,8 @@ jobs:
 
       - name: Resolve WebRTC dependency
         working-directory: android-agent
-        run: |
-          ./gradlew dependencies \
+       run: |
+          ./gradlew :app:dependencies \
             --configuration debugCompileClasspath \
             --stacktrace
 
