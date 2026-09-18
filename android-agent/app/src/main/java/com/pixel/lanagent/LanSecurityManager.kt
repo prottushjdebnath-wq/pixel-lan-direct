@@ -6,6 +6,7 @@ import android.util.Log
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import org.json.JSONObject
+import java.math.BigInteger
 import java.security.*
 import java.security.spec.ECGenParameterSpec
 import java.security.spec.PKCS8EncodedKeySpec
@@ -57,6 +58,97 @@ class LanSecurityManager(
 
         fun b64Decode(str: String): ByteArray =
             Base64.getDecoder().decode(str.trim())
+
+        fun p1363ToDer(sigBytes: ByteArray): ByteArray {
+            if (sigBytes.size != 64) return sigBytes
+            val rBytes = sigBytes.copyOfRange(0, 32)
+            val sBytes = sigBytes.copyOfRange(32, 64)
+            val r = BigInteger(1, rBytes).toByteArray()
+            val s = BigInteger(1, sBytes).toByteArray()
+            val len = 2 + r.size + 2 + s.size
+            val der = ByteArray(2 + len)
+            der[0] = 0x30.toByte()
+            der[1] = len.toByte()
+            der[2] = 0x02.toByte()
+            der[3] = r.size.toByte()
+            System.arraycopy(r, 0, der, 4, r.size)
+            val sOffset = 4 + r.size
+            der[sOffset] = 0x02.toByte()
+            der[sOffset + 1] = s.size.toByte()
+            System.arraycopy(s, 0, der, sOffset + 2, s.size)
+            return der
+        }
+
+        // --- Deterministic Command Canonicalization & Verification ---
+        // Format: Length-prefixed fields separated by '|':
+        // PROTOCOL_CONTEXT | command_id | session_id | epoch | seq_num | timestamp | action | canonical_parameters | controller_id | controller_pubkey
+
+        fun canonicalizeParameters(params: JSONObject?): String {
+            if (params == null || params.length() == 0) return ""
+            val keys = params.keys().asSequence().toList().sorted()
+            return keys.joinToString(",") { k ->
+                val v = params.get(k).toString()
+                "${k.length}:$k=${v.length}:$v"
+            }
+        }
+
+        fun buildCanonicalCommandPayload(
+            protocolContext: String = PROTOCOL_CONTEXT,
+            commandId: String,
+            sessionId: String,
+            epoch: Long,
+            seqNum: Long,
+            timestamp: Long,
+            action: String,
+            parameters: JSONObject?,
+            controllerId: String,
+            controllerPubkey: String
+        ): String {
+            val canonicalParams = canonicalizeParameters(parameters)
+            val fields = listOf(
+                protocolContext,
+                commandId,
+                sessionId,
+                epoch.toString(),
+                seqNum.toString(),
+                timestamp.toString(),
+                action,
+                canonicalParams,
+                controllerId,
+                controllerPubkey
+            )
+            return fields.joinToString("|") { "${it.length}:$it" }
+        }
+
+        fun signCommandPayload(
+            privateKey: PrivateKey,
+            commandId: String,
+            sessionId: String,
+            epoch: Long,
+            seqNum: Long,
+            timestamp: Long,
+            action: String,
+            parameters: JSONObject?,
+            controllerId: String,
+            controllerPubkey: String
+        ): String {
+            val canonical = buildCanonicalCommandPayload(
+                PROTOCOL_CONTEXT,
+                commandId,
+                sessionId,
+                epoch,
+                seqNum,
+                timestamp,
+                action,
+                parameters,
+                controllerId,
+                controllerPubkey
+            )
+            val signer = Signature.getInstance("SHA256withECDSA")
+            signer.initSign(privateKey)
+            signer.update(canonical.toByteArray(Charsets.UTF_8))
+            return b64Encode(signer.sign())
+        }
     }
 
     private val prefs: SharedPreferences = customPrefs ?: run {
@@ -367,6 +459,14 @@ class LanSecurityManager(
         }
     }
 
+    fun getControllerPublicKeyBase64(controllerId: String): String? {
+        val controllers = getPairedControllersMap()
+        val record = controllers.optJSONObject(controllerId) ?: return null
+        if (record.optBoolean("revoked", false)) return null
+        val pubB64 = record.optString("public_key", "")
+        return pubB64.ifEmpty { null }
+    }
+
     fun revokeController(controllerId: String) {
         val controllers = getPairedControllersMap()
         val record = controllers.optJSONObject(controllerId)
@@ -476,7 +576,7 @@ class LanSecurityManager(
             val verifier = Signature.getInstance("SHA256withECDSA")
             verifier.initVerify(controllerKey)
             verifier.update(canonicalPayload.toByteArray(Charsets.UTF_8))
-            val sigBytes = b64Decode(sigB64)
+            val sigBytes = p1363ToDer(b64Decode(sigB64))
 
             if (verifier.verify(sigBytes)) {
                 pendingChallenge = null
@@ -507,12 +607,16 @@ class LanSecurityManager(
     // --- Hardened Command Validation & Persistent Replay Engine ---
 
     fun validateCommand(cmdJson: JSONObject): CommandValidationResult {
+        // 1. Active authenticated session
         val session = activeSession ?: return CommandValidationResult.Rejected("No active authenticated session")
 
-        val cmdSessionId = cmdJson.optString("session_id")
+        // 2. Basic command structure
         val commandId = cmdJson.optString("command_id")
+        val cmdSessionId = cmdJson.optString("session_id")
         val seqNum = cmdJson.optLong("seq_num", -1L)
         val timestamp = cmdJson.optLong("timestamp", 0L)
+        val action = cmdJson.optString("action")
+        val signature = cmdJson.optString("signature")
 
         if (commandId.isEmpty()) {
             return CommandValidationResult.Rejected("Missing command_id")
@@ -522,6 +626,15 @@ class LanSecurityManager(
             return CommandValidationResult.Rejected("Missing or invalid seq_num")
         }
 
+        if (action.isEmpty()) {
+            return CommandValidationResult.Rejected("Missing action")
+        }
+
+        if (signature.isEmpty()) {
+            return CommandValidationResult.Rejected("Missing command signature")
+        }
+
+        // 3. Mandatory epoch validation
         if (!cmdJson.has("epoch")) {
             return CommandValidationResult.Rejected("Missing mandatory session epoch")
         }
@@ -531,16 +644,58 @@ class LanSecurityManager(
             return CommandValidationResult.Rejected("Invalid non-numeric session epoch")
         }
 
+        // 4. Epoch == active session epoch
         if (epoch != session.epoch) {
             return CommandValidationResult.Rejected("Stale epoch: received $epoch != active ${session.epoch}")
         }
 
+        // 5. Timestamp validation
         val now = System.currentTimeMillis()
         if (Math.abs(now - timestamp) > MAX_CLOCK_DRIFT_MS) {
             return CommandValidationResult.Rejected("Command timestamp expired or excessive clock drift (> 5 min)")
         }
 
-        // 1. Replay & Duplicate Check against persistent ring buffer
+        // 6. Session_id validation
+        if (cmdSessionId != session.sessionId) {
+            return CommandValidationResult.Rejected("Invalid session_id for current epoch; command not found in idempotency cache")
+        }
+
+        // 7. Application-layer command signature verification
+        val controllerKey = getControllerPublicKey(session.controllerId)
+            ?: return CommandValidationResult.Rejected("Controller public key not found or revoked")
+        val controllerPubB64 = getControllerPublicKeyBase64(session.controllerId)
+            ?: return CommandValidationResult.Rejected("Controller public key not available")
+
+        val params = cmdJson.optJSONObject("parameters")
+        val canonicalPayload = buildCanonicalCommandPayload(
+            protocolContext = PROTOCOL_CONTEXT,
+            commandId = commandId,
+            sessionId = cmdSessionId,
+            epoch = epoch,
+            seqNum = seqNum,
+            timestamp = timestamp,
+            action = action,
+            parameters = params,
+            controllerId = session.controllerId,
+            controllerPubkey = controllerPubB64
+        )
+
+        val isValidSig = try {
+            val sigBytes = p1363ToDer(b64Decode(signature))
+            val verifier = Signature.getInstance("SHA256withECDSA")
+            verifier.initVerify(controllerKey)
+            verifier.update(canonicalPayload.toByteArray(Charsets.UTF_8))
+            verifier.verify(sigBytes)
+        } catch (e: Exception) {
+            Log.w(TAG, "Command signature verification exception: ${e.message}")
+            false
+        }
+
+        if (!isValidSig) {
+            return CommandValidationResult.Rejected("Invalid command signature")
+        }
+
+        // 8. Duplicate / idempotency handling against persistent ring buffer
         synchronized(commandRingBuffer) {
             val cachedRecord = commandRingBuffer[commandId]
             if (cachedRecord != null) {
@@ -554,16 +709,13 @@ class LanSecurityManager(
             }
         }
 
-        // 2. Enforce active session ID
-        if (cmdSessionId != session.sessionId) {
-            return CommandValidationResult.Rejected("Invalid session_id for current epoch; command not found in idempotency cache")
-        }
-
-        // 3. Monotonic sequence number enforcement within the session
+        // 9. Monotonic sequence number enforcement within the session
         if (seqNum <= session.lastSeqNum) {
             return CommandValidationResult.Rejected("Stale sequence number: received $seqNum <= last seen ${session.lastSeqNum}")
         }
 
+        // 10. Authorization / session consistency: verified in Steps 1, 6, 7
+        // 11. Execution: caller proceeds
         return CommandValidationResult.Valid
     }
 

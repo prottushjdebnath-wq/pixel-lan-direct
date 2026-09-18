@@ -92,17 +92,24 @@ async function handleIncomingDataChannelMessage(msg) {
         // Reconnect recovery: resubmit unacknowledged command if connection was dropped in-flight
         if (lastSentCommand) {
           console.log("[Recovery] Resubmitting unacknowledged command across reconnect:", lastSentCommand.command_id);
+          const nextSeq = ++seqCounter;
           const retryPayload = {
             type: "COMMAND",
             command_id: lastSentCommand.command_id,
             session_id: activeSessionId,
             epoch: activeEpoch,
-            seq_num: ++seqCounter,
+            seq_num: nextSeq,
             timestamp: lastSentCommand.timestamp,
             action: lastSentCommand.action,
-            parameters: lastSentCommand.parameters
+            parameters: lastSentCommand.parameters,
+            controller_id: cryptoClient.controllerId
           };
-          connectionManager.sendDataChannel(retryPayload);
+          try {
+            retryPayload.signature = await cryptoClient.signCommand(retryPayload);
+            connectionManager.sendDataChannel(retryPayload);
+          } catch (err) {
+            console.error("Failed to sign recovery command:", err);
+          }
         } else {
           fetchTelemetry();
         }
@@ -163,7 +170,7 @@ async function sendPairRequest(pin) {
 
 // --- Command Dispatch & Idempotent Tracking ---
 
-function sendCommand(action, params = {}) {
+async function sendCommand(action, params = {}) {
   if (!connectionManager || !activeSessionId) {
     console.warn("Cannot send command: session not active/authenticated");
     return;
@@ -173,17 +180,26 @@ function sendCommand(action, params = {}) {
     ? crypto.randomUUID()
     : "cmd-" + Math.random().toString(36).substring(2, 10);
   const now = Date.now();
+  const nextSeq = ++seqCounter;
 
   const payload = {
     type: "COMMAND",
     command_id: cmdId,
     session_id: activeSessionId,
     epoch: activeEpoch,
-    seq_num: ++seqCounter,
+    seq_num: nextSeq,
     timestamp: now,
     action: action,
-    parameters: params
+    parameters: params,
+    controller_id: cryptoClient.controllerId
   };
+
+  try {
+    payload.signature = await cryptoClient.signCommand(payload);
+  } catch (err) {
+    console.error("Failed to sign command:", err);
+    return;
+  }
 
   // Track unacknowledged command for reconnect idempotency recovery
   lastSentCommand = {

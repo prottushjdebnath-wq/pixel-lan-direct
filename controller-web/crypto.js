@@ -105,6 +105,75 @@ class ControllerCrypto {
     };
   }
 
+  // --- Deterministic Command Canonicalization & Per-Command Signing ---
+  // Canonical representation: Length-prefixed fields joined by '|':
+  // PROTOCOL_CONTEXT | command_id | session_id | epoch | seq_num | timestamp | action | canonical_parameters | controller_id | controller_pubkey
+
+  canonicalizeParameters(params) {
+    if (!params || typeof params !== 'object') return "";
+    const keys = Object.keys(params).sort();
+    if (keys.length === 0) return "";
+    return keys.map(k => {
+      const val = String(params[k]);
+      return `${k.length}:${k}=${val.length}:${val}`;
+    }).join(",");
+  }
+
+  buildCanonicalCommandPayload({
+    protocolContext = PROTOCOL_CONTEXT,
+    commandId,
+    sessionId,
+    epoch,
+    seqNum,
+    timestamp,
+    action,
+    parameters = {},
+    controllerId,
+    controllerPubkey
+  }) {
+    const canonicalParams = this.canonicalizeParameters(parameters);
+    const fields = [
+      String(protocolContext),
+      String(commandId),
+      String(sessionId),
+      String(epoch),
+      String(seqNum),
+      String(timestamp),
+      String(action),
+      String(canonicalParams),
+      String(controllerId),
+      String(controllerPubkey)
+    ];
+    return fields.map(f => `${f.length}:${f}`).join("|");
+  }
+
+  async signCommand(commandObj) {
+    if (!this.keyPair || !this.keyPair.privateKey) {
+      throw new Error("Controller private key not initialized");
+    }
+    const canonicalPayload = this.buildCanonicalCommandPayload({
+      protocolContext: commandObj.protocol_context || PROTOCOL_CONTEXT,
+      commandId: commandObj.command_id,
+      sessionId: commandObj.session_id,
+      epoch: commandObj.epoch,
+      seqNum: commandObj.seq_num,
+      timestamp: commandObj.timestamp,
+      action: commandObj.action,
+      parameters: commandObj.parameters,
+      controllerId: this.controllerId,
+      controllerPubkey: this.publicKeyDerB64
+    });
+
+    const enc = new TextEncoder();
+    const sigBuf = await this.subtle.sign(
+      { name: "ECDSA", hash: { name: "SHA-256" } },
+      this.keyPair.privateKey,
+      enc.encode(canonicalPayload)
+    );
+
+    return this.arrayBufferToBase64(sigBuf);
+  }
+
   // --- Helpers & Storage ---
 
   arrayBufferToBase64(buffer) {
