@@ -55,6 +55,19 @@ jobs:
         working-directory: android-agent
         run: |
           ./gradlew :app:dependencies --configuration debugCompileClasspath --stacktrace
+      - name: Run Android Unit Tests
+        working-directory: android-agent
+        run: |
+          ./gradlew testDebugUnitTest --stacktrace
+      - name: Test Signaling Server
+        run: |
+          cd signaling-server
+          npm install
+          npm test
+      - name: Test Controller Web Crypto
+        run: |
+          cd controller-web
+          node test-controller.js
       - name: Build APK
         working-directory: android-agent
         run: |

@@ -28,6 +28,9 @@ android {
     kotlinOptions {
         jvmTarget = '17'
     }
+    testOptions {
+        unitTests.returnDefaultValues = true
+    }
 }
 
 dependencies {
@@ -39,4 +42,9 @@ dependencies {
     implementation 'io.getstream:stream-webrtc-android:1.1.1'
     // QR Code generation for out-of-band bootstrap & physical key verification
     implementation 'com.google.zxing:core:3.5.3'
+    // Outbound WebSocket signaling client (pure in-app transport, no OS networking software added)
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.json:json:20231013'
 }

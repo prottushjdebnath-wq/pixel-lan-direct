@@ -49,6 +49,13 @@ class MainActivity : Activity() {
             text = "Device FP: ${securityManager.getDeviceFingerprint()}"
             textSize = 12f
             setTextColor(Color.parseColor("#4CAF50"))
+            setPadding(0, 0, 0, 4)
+        }
+
+        val epochView = TextView(this).apply {
+            text = "Session Epoch: ${securityManager.persistentEpoch} (Monotonic persistent watermark)"
+            textSize = 12f
+            setTextColor(Color.parseColor("#64B5F6"))
             setPadding(0, 0, 0, 10)
         }
 
@@ -89,6 +96,7 @@ class MainActivity : Activity() {
                 val primaryIp = getLocalIpAddresses().firstOrNull() ?: "127.0.0.1"
                 val qrData = JSONObject().apply {
                     put("type", "PIXEL_BOOTSTRAP")
+                    put("protocol_context", LanSecurityManager.PROTOCOL_CONTEXT)
                     put("pixel_id", securityManager.getDeviceId())
                     put("ip", primaryIp)
                     put("port", LanManagementService.LOCAL_BOOTSTRAP_PORT)
@@ -96,12 +104,45 @@ class MainActivity : Activity() {
                     put("nonce", bootstrap.nonce)
                     put("pubkey", securityManager.getDevicePublicKeyBase64())
                     put("fp", securityManager.getDeviceFingerprint())
+                    put("epoch", securityManager.persistentEpoch)
                 }.toString()
 
                 val bitmap = generateQrBitmap(qrData, 500, 500)
                 if (bitmap != null) {
                     qrImageView.setImageBitmap(bitmap)
                     qrImageView.visibility = ImageView.VISIBLE
+                }
+            }
+        }
+
+        // Remote WebSocket signaling configuration
+        val signalingLabel = TextView(this).apply {
+            text = "Remote WebSocket Signaling URL:"
+            textSize = 13f
+            setPadding(0, 15, 0, 4)
+        }
+
+        val signalingInput = EditText(this).apply {
+            hint = "ws://<remote-host>:8991/signaling"
+            textSize = 13f
+        }
+
+        val btnConnectSignaling = Button(this).apply {
+            text = "Connect Remote Signaling"
+            setOnClickListener {
+                val url = signalingInput.text.toString().trim()
+                if (url.isNotEmpty()) {
+                    val intent = Intent(this@MainActivity, LanManagementService::class.java).apply {
+                        putExtra(LanManagementService.EXTRA_SIGNALING_URL, url)
+                    }
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        startForegroundService(intent)
+                    } else {
+                        startService(intent)
+                    }
+                    Toast.makeText(this@MainActivity, "Connecting remote signaling...", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(this@MainActivity, "Enter signaling URL", Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -143,17 +184,32 @@ class MainActivity : Activity() {
             }
         }
 
+        val noticeView = TextView(this).apply {
+            text = "MANDATORY SECURITY QUALIFICATIONS:\n\n" +
+                    "• The Pixel core agent is PERSISTENT WHILE ANDROID PERMITS EXECUTION USING SUPPORTED LIFECYCLE MECHANISMS.\n\n" +
+                    "• WebRTC provides encrypted DTLS/SCTP transport for DataChannels; exact protocol version and cipher suite are implementation dependent.\n\n" +
+                    "• The system is DESIGNED FOR AUTOMATIC TRANSPORT RECOVERY AND SESSION RESYNCHRONIZATION; PHYSICAL MIGRATION REMAINS UNVERIFIED."
+            textSize = 10f
+            setTextColor(Color.parseColor("#9E9E9E"))
+            setPadding(0, 20, 0, 10)
+        }
+
         layout.addView(title)
         layout.addView(fpView)
+        layout.addView(epochView)
         layout.addView(ipView)
         layout.addView(a11yStatus)
         layout.addView(codeDisplay)
         layout.addView(qrImageView)
         layout.addView(btnGenCode)
+        layout.addView(signalingLabel)
+        layout.addView(signalingInput)
+        layout.addView(btnConnectSignaling)
         layout.addView(btnA11y)
         layout.addView(btnBattery)
         layout.addView(btnStartService)
         layout.addView(btnRevoke)
+        layout.addView(noticeView)
 
         setContentView(scrollView)
     }

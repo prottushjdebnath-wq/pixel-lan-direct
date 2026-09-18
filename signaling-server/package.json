@@ -1,0 +1,20 @@
+{
+  "name": "pixel-secure-signaling-server",
+  "version": "1.0.0",
+  "description": "Restricted ephemeral WebSocket rendezvous and signaling server for Pixel WebRTC remote management",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test.js"
+  },
+  "dependencies": {
+    "ws": "^8.21.3"
+  },
+  "keywords": [
+    "webrtc",
+    "signaling",
+    "rendezvous"
+  ],
+  "author": "",
+  "license": "Apache-2.0"
+}
