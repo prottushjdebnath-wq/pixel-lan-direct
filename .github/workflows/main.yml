@@ -1,0 +1,69 @@
+name: Android Build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK 34
+        run: |
+          sdkmanager "platforms;android-34" "build-tools;34.0.0"
+          yes | sdkmanager --licenses >/dev/null || true
+
+      - name: Verify source
+        run: |
+          test -f android-agent/settings.gradle
+          test -f android-agent/build.gradle
+          test -f android-agent/app/build.gradle
+          test -f android-agent/gradlew
+          test -f android-agent/gradle/wrapper/gradle-wrapper.properties
+
+      - name: Generate Gradle wrapper
+        working-directory: android-agent
+        run: |
+          gradle wrapper --gradle-version 8.2
+          chmod +x gradlew
+
+      - name: Resolve WebRTC dependency
+        working-directory: android-agent
+        run: |
+          ./gradlew dependencies --configuration debugCompileClasspath --stacktrace
+
+      - name: Build APK
+        working-directory: android-agent
+        run: |
+          ./gradlew clean assembleDebug --stacktrace
+
+      - name: Verify APK
+        working-directory: android-agent
+        run: |
+          test -f app/build/outputs/apk/debug/app-debug.apk
+          ls -lh app/build/outputs/apk/debug/app-debug.apk
+
+      - name: SHA-256
+        working-directory: android-agent
+        run: |
+          sha256sum app/build/outputs/apk/debug/app-debug.apk | tee apk-sha256.txt
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: pixel-lan-direct-debug-apk
+          path: |
+            android-agent/app/build/outputs/apk/debug/app-debug.apk
+            android-agent/apk-sha256.txt
