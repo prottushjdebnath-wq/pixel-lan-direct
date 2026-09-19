@@ -171,4 +171,45 @@ test('Controller WebCrypto & Context-Bound Authentication', async (t) => {
     const expected = '6:accent=4:Café,3:cjk=5:こんにちは,5:emoji=2:🚀,7:symbols=3::=|';
     assert.strictEqual(canonical, expected);
   });
+
+  await t.test('VPS-Independent Endpoint Configuration (STUN, TURN, WSS)', () => {
+    const { ConnectionManager } = require('./connection-manager.js');
+    const cm = new ConnectionManager();
+
+    // Default configuration must NOT contain VPS IP or VPS hostname
+    assert.strictEqual(cm.iceServers.some((s) => JSON.stringify(s).includes('187.53.132.80')), false);
+    assert.strictEqual(cm.iceServers.some((s) => JSON.stringify(s).includes('srv1947292')), false);
+
+    // Custom independent STUN/TURN fallback configuration
+    const customIce = [
+      { urls: 'stun:stun.independent-relay.org:3478' },
+      { urls: 'turn:turn.independent-relay.org:3478', username: 'ephemeral-user', credential: 'turn-password' }
+    ];
+    cm.setIceServers(customIce);
+    assert.deepStrictEqual(cm.iceServers, customIce);
+
+    // Custom independent signaling URL configuration
+    cm.signalingUrl = 'wss://signaling.independent-domain.org/signaling';
+    cm.controllerId = 'ctl-test-independent';
+    assert.strictEqual(cm.signalingUrl, 'wss://signaling.independent-domain.org/signaling');
+  });
+
+  await t.test('ConnectionManager transport recovery and reconnect state handling', () => {
+    const { ConnectionManager } = require('./connection-manager.js');
+    const stateChanges = [];
+    const cm = new ConnectionManager({
+      onStateChange: (state, detail) => stateChanges.push({ state, detail })
+    });
+
+    cm.updateState('CONNECTING', 'Initiating WebRTC handshake');
+    cm.updateState('INTERNET_P2P', 'Connected (Internet P2P srflx)');
+    cm.updateState('TURN_RELAY', 'Connected (Relay TURN)');
+    cm.updateState('DIRECT_LAN', 'Connected (Direct LAN)');
+
+    assert.strictEqual(stateChanges.length, 4);
+    assert.strictEqual(stateChanges[0].state, 'CONNECTING');
+    assert.strictEqual(stateChanges[1].state, 'INTERNET_P2P');
+    assert.strictEqual(stateChanges[2].state, 'TURN_RELAY');
+    assert.strictEqual(stateChanges[3].state, 'DIRECT_LAN');
+  });
 });
