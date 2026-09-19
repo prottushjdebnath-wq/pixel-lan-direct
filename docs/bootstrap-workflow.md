@@ -36,13 +36,16 @@ Wi-Fi network. No VPS hostname or public IP is baked into any run-time config
 
 ### Repo-approved artifact (single source of truth)
 
-- Approved commit: `632484f8d2453e84f3e1a6c83fb8effec3ead7ef`
+- Approved **functional source** commit: `632484f8d2453e84f3e1a6c83fb8effec3ead7ef`
+  (agent, controller, signaling server must match this exactly; only
+  `scripts/` and `docs/` - this workflow itself - may differ).
 - APK: `android-agent/app/build/outputs/apk/debug/app-debug.apk`
 - SHA-256: `7f733504a7c57eb7ee4f032f1e248b36d7f6db3dc2f7812e4207d2da714a05c4`
 - Package: `com.pixel.lanagent` (versionCode 1, versionName 1.0.0)
 - Main activity: `com.pixel.lanagent/.MainActivity`
 
-The scripts verify HEAD equals the approved commit, the working tree has no
+The scripts verify the functional source tree matches the approved commit
+(with only `scripts/`/`docs/` allowed to differ), the working tree has no
 modifications to tracked files, and the APK's SHA-256 matches before any
 device is touched.
 

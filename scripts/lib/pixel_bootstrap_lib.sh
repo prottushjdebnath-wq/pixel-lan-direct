@@ -113,20 +113,30 @@ plx_verify_repo_state() {
     if ! command -v git >/dev/null 2>&1; then
         plx_die "$PIXEL_EXIT_PREFLIGHT" "git not available"
     fi
-    local head
+    local head dirty delta
     head="$(git -C "$PIXEL_REPO_ROOT" rev-parse HEAD 2>/dev/null || true)"
-    if [ "$head" != "$PIXEL_EXPECTED_COMMIT" ]; then
-        plx_fail "HEAD is $head, expected approved commit $PIXEL_EXPECTED_COMMIT"
+    if [ -z "$head" ]; then
+        plx_die "$PIXEL_EXIT_PREFLIGHT" "cannot resolve repository HEAD"
+    fi
+
+    # The functional source tree (android-agent, controller-web, signaling-server,
+    # README, …) must be exactly the approved commit. Only files under scripts/
+    # and docs/ may differ (the bootstrap workflow lives there and evolves).
+    delta="$(git -C "$PIXEL_REPO_ROOT" diff --name-only "$PIXEL_EXPECTED_COMMIT" "$head" 2>/dev/null \
+        | grep -vE '^(scripts/|docs/)' || true)"
+    if [ -n "$delta" ]; then
+        plx_fail "Functional source differs from approved commit $PIXEL_EXPECTED_COMMIT:"
+        printf '%s\n' "$delta" | sed 's/^/    /'
         return "$PIXEL_EXIT_PREFLIGHT"
     fi
-    local dirty
+
     dirty="$(git -C "$PIXEL_REPO_ROOT" status --porcelain --untracked-files=no 2>/dev/null || true)"
     if [ -n "$dirty" ]; then
         plx_fail "Working tree has uncommitted modifications to tracked files:"
         printf '%s\n' "$dirty" | sed 's/^/    /'
         return "$PIXEL_EXIT_PREFLIGHT"
     fi
-    plx_ok "Repository at approved commit $PIXEL_EXPECTED_COMMIT, working tree clean"
+    plx_ok "Functional source pinned to approved commit $PIXEL_EXPECTED_COMMIT (HEAD $head, working tree clean)"
     return 0
 }
 
